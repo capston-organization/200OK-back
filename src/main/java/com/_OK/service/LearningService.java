@@ -13,7 +13,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import jakarta.annotation.PostConstruct;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -37,19 +37,30 @@ public class LearningService {
     /**
      * FastAPI에 틀린 문제를 보내서
      * 집중학습 문제를 새로 생성하는 함수
+     *
+     * ⚠️ Controller의 내부 클래스(ErrorStat)에 의존하지 않기 위해
+     * stats를 "원시 Map 형태"로 받아서 FastAPI payload로 그대로 전달한다.
      */
-    public List<ProblemResponseDto> generateFocusQuestions(List<ErrorStat> stats) {
+    public List<ProblemResponseDto> generateFocusQuestions(List<Map<String, Object>> stats) {
 
         try {
+            // 0️⃣ problemId 목록 추출 (wrongProblemIds 에러 해결)
+            List<Long> wrongProblemIds = stats.stream()
+                    .map(m -> {
+                        Object v = m.get("problemId");
+                        if (v == null) return null;
+                        if (v instanceof Number) return ((Number) v).longValue();
+                        return Long.valueOf(String.valueOf(v));
+                    })
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+
             // 1️⃣ 기존 문제 DB에서 가져오기
             List<Problem> wrongProblems = problemRepository.findAllById(wrongProblemIds);
 
             // 2️⃣ FastAPI 요청 Body 구성
-            FocusRequest request = new FocusRequest(
-                    wrongProblems.stream()
-                            .map(Problem::getQuestion)
-                            .collect(Collectors.toList())
-            );
+            // FastAPI는 error_stats + model 을 받는 형태이므로, 그 구조 그대로 맞춰서 보낸다.
+            FocusRequest request = new FocusRequest(stats, "gpt-4o-mini");
 
             // 3️⃣ FastAPI 호출
             FocusApiResponse response = webClient.post()
@@ -95,17 +106,19 @@ public class LearningService {
         }
     }
 
-    // 요청 DTO
+    // ✅ FastAPI 집중학습 요청 DTO (FastAPI payload 구조 그대로)
     @Getter
     public static class FocusRequest {
-        private final List<String> wrong_questions;
+        private final List<Map<String, Object>> error_stats;
+        private final String model;
 
-        public FocusRequest(List<String> wrong_questions) {
-            this.wrong_questions = wrong_questions;
+        public FocusRequest(List<Map<String, Object>> error_stats, String model) {
+            this.error_stats = error_stats;
+            this.model = model;
         }
     }
 
-    // 응답 DTO
+    // ✅ FastAPI 응답 DTO
     @Getter
     public static class FocusApiResponse {
         private int question_count;
